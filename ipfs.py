@@ -20,7 +20,6 @@ def pin_to_ipfs(data):
 
     cid = response.json()["IpfsHash"]
 	return cid
-
 def get_from_ipfs(cid,content_type="json"):
 	assert isinstance(cid,str), f"get_from_ipfs accepts a cid in the form of a string"
 	#YOUR CODE HERE	
@@ -34,6 +33,5 @@ url = f"https://gateway.pinata.cloud/ipfs/{cid}"
         data = response.json()
     else:
         raise ValueError("Unsupported content_type. Only 'json' is supported.")
-
 	assert isinstance(data,dict), f"get_from_ipfs should return a dict"
 	return data
