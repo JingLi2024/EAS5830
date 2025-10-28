@@ -49,7 +49,7 @@ def is_ordered_block(w3, block_num):
 	ordered = False
 
 	# TODO YOUR CODE HERE
-  def _get(tx, key):
+def _get(tx, key):
 		try:
 			if isinstance(tx, dict):
 				val = tx.get(key)
