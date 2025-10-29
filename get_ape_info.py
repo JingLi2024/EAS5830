@@ -38,14 +38,20 @@ def get_ape_info(ape_id):
     owner_addr = contract.functions.ownerOf(ape_id).call()
     token_uri = contract.functions.tokenURI(ape_id).call()
 
+    # Convert IPFS URI to HTTP (inline, no helper)
+    def ipfs_to_http(uri, gateway):
+        if uri.startswith("ipfs://"):
+            return uri.replace("ipfs://", gateway)
+        return uri
+
     # 2) Off-chain: fetch metadata JSON from IPFS via Pinata gateway
-    metadata_url = _ipfs_to_http(token_uri, gateway=PINATA_GATEWAY)
+    metadata_url = ipfs_to_http(token_uri, gateway=PINATA_GATEWAY)
     try:
         resp = requests.get(metadata_url, timeout=20)
         resp.raise_for_status()
     except Exception:
-        # Fallback to public Pinata gateway if custom gateway hiccups
-        metadata_url = _ipfs_to_http(token_uri, gateway=PUBLIC_PINATA)
+        # Fallback to public Pinata gateway if custom gateway fails
+        metadata_url = ipfs_to_http(token_uri, gateway=PUBLIC_PINATA)
         resp = requests.get(metadata_url, timeout=20)
         resp.raise_for_status()
 
@@ -63,7 +69,7 @@ def get_ape_info(ape_id):
             break
 
     data['owner'] = Web3.to_checksum_address(owner_addr)
-    data['image'] = image_uri              # keep as ipfs:// 
+    data['image'] = image_uri
     data['eyes']  = eyes_value
 
     assert isinstance(data, dict), f'get_ape_info{ape_id} should return a dict'
