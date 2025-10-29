@@ -24,29 +24,6 @@ web3 = Web3(provider)
 PINATA_GATEWAY = "https://silver-passive-dove-978.mypinata.cloud/ipfs/"
 PUBLIC_PINATA  = "https://gateway.pinata.cloud/ipfs/"
 
-def _ipfs_to_http(uri: str, gateway: str = PINATA_GATEWAY) -> str:
-    """
-    Convert an IPFS URI like 'ipfs://CID/path' to an HTTP URL for a gateway.
-    Ensures correct prefix and handles a few common variants.
-    """
-    if not isinstance(uri, str):
-        return uri
-
-    if uri.startswith("ipfs://"):
-        path = uri[len("ipfs://"):]
-    elif uri.startswith("/ipfs/"):
-        path = uri[len("/ipfs/"):]
-    else:
-        # Already an http(s) URL or an unexpected format; return as-is
-        return uri
-
-    if not gateway.endswith("/"):
-        gateway += "/"
-    # Ensure gateway ends with .../ipfs/
-    if not gateway.rstrip("/").endswith("/ipfs"):
-        gateway = gateway.rstrip("/") + "/ipfs/"
-    return gateway + path
-
 def get_ape_info(ape_id):
     assert isinstance(ape_id, int), f"{ape_id} is not an int"
     assert 0 <= ape_id, f"{ape_id} must be at least 0"
