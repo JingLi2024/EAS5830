@@ -19,8 +19,6 @@ api_url = "https://mainnet.infura.io/v3/198ba796b8a548cbb6b4ce669df25a6e"  # YOU
 provider = HTTPProvider(api_url)
 web3 = Web3(provider)
 
-
-# Convert IPFS → HTTP
 PINATA_GATEWAY = "https://silver-passive-dove-978.mypinata.cloud/ipfs/"
 PUBLIC_PINATA  = "https://gateway.pinata.cloud/ipfs/"
 
@@ -38,7 +36,7 @@ def get_ape_info(ape_id):
     owner_addr = contract.functions.ownerOf(ape_id).call()
     token_uri = contract.functions.tokenURI(ape_id).call()
 
-    # Convert IPFS URI to HTTP (inline, no helper)
+    # Convert IPFS URI to HTTP
     def ipfs_to_http(uri, gateway):
         if uri.startswith("ipfs://"):
             return uri.replace("ipfs://", gateway)
