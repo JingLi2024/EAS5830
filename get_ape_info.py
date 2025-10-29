@@ -20,6 +20,33 @@ provider = HTTPProvider(api_url)
 web3 = Web3(provider)
 
 
+# ---- IPFS → HTTP helper (uses YOUR Pinata gateway) ----
+PINATA_GATEWAY = "https://silver-passive-dove-978.mypinata.cloud/ipfs/"
+PUBLIC_PINATA  = "https://gateway.pinata.cloud/ipfs/"
+
+def _ipfs_to_http(uri: str, gateway: str = PINATA_GATEWAY) -> str:
+    """
+    Convert an IPFS URI like 'ipfs://CID/path' to an HTTP URL for a gateway.
+    Ensures correct prefix and handles a few common variants.
+    """
+    if not isinstance(uri, str):
+        return uri
+
+    if uri.startswith("ipfs://"):
+        path = uri[len("ipfs://"):]
+    elif uri.startswith("/ipfs/"):
+        path = uri[len("/ipfs/"):]
+    else:
+        # Already an http(s) URL or an unexpected format; return as-is
+        return uri
+
+    if not gateway.endswith("/"):
+        gateway += "/"
+    # Ensure gateway ends with .../ipfs/
+    if not gateway.rstrip("/").endswith("/ipfs"):
+        gateway = gateway.rstrip("/") + "/ipfs/"
+    return gateway + path
+
 def get_ape_info(ape_id):
     assert isinstance(ape_id, int), f"{ape_id} is not an int"
     assert 0 <= ape_id, f"{ape_id} must be at least 0"
@@ -27,7 +54,6 @@ def get_ape_info(ape_id):
 
     data = {'owner': "", 'image': "", 'eyes': ""}
 
-    # YOUR CODE HERE
     # Instantiate the contract
     contract = web3.eth.contract(address=contract_address, abi=abi)
 
@@ -35,10 +61,17 @@ def get_ape_info(ape_id):
     owner_addr = contract.functions.ownerOf(ape_id).call()
     token_uri = contract.functions.tokenURI(ape_id).call()
 
-    # 2) Off-chain: fetch metadata JSON from IPFS via Pinata gateway
-    metadata_url = _ipfs_to_http(token_uri, gateway="https://gateway.pinata.cloud/ipfs/")
-    resp = requests.get(metadata_url, timeout=20)
-    resp.raise_for_status()
+    # 2) Off-chain: fetch metadata JSON from IPFS via YOUR Pinata gateway
+    metadata_url = _ipfs_to_http(token_uri, gateway=PINATA_GATEWAY)
+    try:
+        resp = requests.get(metadata_url, timeout=20)
+        resp.raise_for_status()
+    except Exception:
+        # Fallback to public Pinata gateway if your custom gateway hiccups
+        metadata_url = _ipfs_to_http(token_uri, gateway=PUBLIC_PINATA)
+        resp = requests.get(metadata_url, timeout=20)
+        resp.raise_for_status()
+
     meta = resp.json()
 
     # Pull fields from metadata
@@ -53,7 +86,7 @@ def get_ape_info(ape_id):
             break
 
     data['owner'] = Web3.to_checksum_address(owner_addr)
-    data['image'] = image_uri              # keep as ipfs://
+    data['image'] = image_uri              # keep as ipfs:// per assignment
     data['eyes']  = eyes_value
 
     assert isinstance(data, dict), f'get_ape_info{ape_id} should return a dict'
