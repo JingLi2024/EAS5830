@@ -21,12 +21,12 @@ def sign_message(challenge, filename="secret_key.txt"):
 
     # TODO recover your account information for your private key and sign the given challenge
     # Use the code from the signatures assignment to sign the given challenge
-    priv_key = key[0].strip()
-    if not priv_key.startswith("0x"):
-        priv_key = "0x" + priv_key
+    secret_key = key[0].strip()
+    if not secret_key.startswith("0x"):
+        secret_key = "0x" + secret_key
 
     # Recover account info
-    account_object = eth_account.Account.from_key(priv_key)        # using existing key
+    account_object = eth_account.Account.from_key(secret_key)        # called using existing key
     eth_addr = account_object.address                              # public key / address
     private_key = account_object.key                               # private key bytes
 
