@@ -176,11 +176,25 @@ def sign_challenge(challenge):
     eth_sk = acct.key
 
     # TODO YOUR CODE HERE
+    # Correct signing per EIP-191 / OpenZeppelin's verify
     from eth_account.messages import encode_defunct
-    msg = encode_defunct(text=challenge)               # EIP-191 "personal_sign"
-    eth_sig_obj = eth_account.Account.sign_message(
-        msg, private_key=eth_sk
-    )
+    msg = encode_defunct(text=challenge)
+    eth_sig_obj = eth_account.Account.sign_message(msg, private_key=eth_sk)
+
+    # Strip leading '0x' if present to avoid “Non-hexadecimal digit found” error
+    if isinstance(eth_sig_obj.signature, (bytes, bytearray)):
+        # convert bytes to hex string without '0x'
+        sig_hex = eth_sig_obj.signature.hex()
+    else:
+        # handle if signature is already a string with 0x
+        sig_hex = str(eth_sig_obj.signature)
+        if sig_hex.startswith("0x"):
+            sig_hex = sig_hex[2:]
+        # convert back to bytes to make .hex() work safely
+        sig_hex = bytes.fromhex(sig_hex).hex()
+
+    # Reassign the sanitized signature to the object before returning
+    eth_sig_obj.signature = bytes.fromhex(sig_hex)
 
     return addr, eth_sig_obj.signature.hex()
 
