@@ -24,41 +24,45 @@ contract Destination is AccessControl {
 
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
-		address wrapped = underlying_tokens[_underlying_token];
-		require(wrapped != address(0), "Underlying not registered");
-		require(_recipient != address(0), "Invalid recipient");
-		require(_amount > 0, "Amount must be > 0");
+		  // Ensure the underlying is registered and get the wrapped token
+    address wrapped = underlying_tokens[_underlying_token];
+    require(wrapped != address(0), "Underlying not registered");
 
-		BridgeToken(wrapped).mint(_recipient, _amount);
-		emit Wrap(_underlying_token, wrapped, _recipient, _amount);
-	}
+    // Mint to recipient (amount may be zero; OZ ERC20 handles 0 safely)
+    BridgeToken(wrapped).mint(_recipient, _amount);
+
+    emit Wrap(_underlying_token, wrapped, _recipient, _amount);
+}
 
 	function unwrap(address _wrapped_token, address _recipient, uint256 _amount ) public {
 		//YOUR CODE HERE
-		address underlying = wrapped_tokens[_wrapped_token];
-		require(underlying != address(0), "Wrapped token not recognized");
-		require(_recipient != address(0), "Invalid recipient");
-		require(_amount > 0, "Amount must be > 0");
-		require(ERC20(_wrapped_token).balanceOf(msg.sender) >= _amount, "Insufficient balance");
+		// Ensure this wrapped token is one we registered
+    address underlying = wrapped_tokens[_wrapped_token];
+    require(underlying != address(0), "Wrapped token not recognized");
 
-		BridgeToken(_wrapped_token).burnFrom(msg.sender, _amount);
-		emit Unwrap(underlying, _wrapped_token, msg.sender, _recipient, _amount);
+    // Burn caller's tokens. Since this contract has MINTER_ROLE on the BridgeToken
+    // it may burn without allowance; ERC20 will still enforce sufficient balance.
+    BridgeToken(_wrapped_token).burnFrom(msg.sender, _amount);
+
+    emit Unwrap(underlying, _wrapped_token, msg.sender, _recipient, _amount);
 	}
 
 	function createToken(address _underlying_token, string memory name, string memory symbol ) public onlyRole(CREATOR_ROLE) returns(address) {
 		//YOUR CODE HERE
 	  require(_underlying_token != address(0), "Invalid underlying");
-		require(underlying_tokens[_underlying_token] == address(0), "Already registered");
+    require(underlying_tokens[_underlying_token] == address(0), "Already registered");
 
-		BridgeToken token = new BridgeToken(_underlying_token, name, symbol, address(this));
-		address wrapped = address(token);
+    // Make this Destination contract the admin/minter on the BridgeToken
+    BridgeToken token = new BridgeToken(_underlying_token, name, symbol, address(this));
+    address wrapped = address(token);
 
-		underlying_tokens[_underlying_token] = wrapped;
-		wrapped_tokens[wrapped] = _underlying_token;
-		tokens.push(wrapped);
+    // Register mappings in both directions and track the new token
+    underlying_tokens[_underlying_token] = wrapped;
+    wrapped_tokens[wrapped] = _underlying_token;
+    tokens.push(wrapped);
 
-		emit Creation(_underlying_token, wrapped);
-		return wrapped;
+    emit Creation(_underlying_token, wrapped);
+    return wrapped;
 	}
 
 }
