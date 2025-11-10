@@ -229,7 +229,6 @@ def send_signed_msg(proof, random_leaf):
     # Web3.py v6 uses `raw_transaction` (snake_case), not `rawTransaction`
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
 
-    # (Optional) wait for receipt so you know it finalized
     try:
         w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
     except Exception:
