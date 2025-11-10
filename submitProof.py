@@ -25,7 +25,8 @@ def merkle_assignment():
     tree = build_merkle(leaves)
 
     # Select a random leaf and create a proof for that leaf
-    random_leaf_index = random.randint(1, num_of_primes - 1) #TODO generate a random index from primes to claim (0 is already claimed)
+    # 0 is already claimed, so pick from 1..8191
+    random_leaf_index = random.randint(1, num_of_primes - 1)
     proof = prove_merkle(tree, random_leaf_index)
 
     # This is the same way the grader generates a challenge for sign_challenge()
@@ -34,10 +35,7 @@ def merkle_assignment():
     addr, sig = sign_challenge(challenge)
 
     if sign_challenge_verify(challenge, addr, sig):
-        tx_hash = '0x'
-        # TODO, when you are ready to attempt to claim a prime (and pay gas fees),
-        #  complete this method and run your code with the following line un-commented
-        # tx_hash = send_signed_msg(proof, leaves[random_leaf_index])
+        # Submit the claim (pays gas)
         tx_hash = send_signed_msg(proof, leaves[random_leaf_index])
         print("Claim submitted!")
         print("Your address:", addr)
@@ -106,6 +104,7 @@ def convert_leaves(primes_list):
     leaves = [int(p).to_bytes(32, 'big') for p in primes_list]
 
     return leaves
+
 
 def build_merkle(leaves):
     """
@@ -181,11 +180,16 @@ def sign_challenge(challenge):
     msg = encode_defunct(text=challenge)
     signed = eth_account.Account.sign_message(msg, private_key=eth_sk)
 
-    # Create a tiny container whose `.signature` is BYTES, not HexBytes.
-    # Then .hex() will return pure hex with NO '0x' prefix.
+    # Convert to pure hex (no '0x', no whitespace), validate, then set as raw bytes
+    sig_hex = signed.signature.hex()
+    if sig_hex.startswith("0x"):
+        sig_hex = sig_hex[2:]
+    sig_hex = sig_hex.strip().lower()
+    sig_bytes = bytes.fromhex(sig_hex)  # raises if any non-hex chars
+
     class _S: pass
     eth_sig_obj = _S()
-    eth_sig_obj.signature = bytes(signed.signature)  # raw bytes -> .hex() has no '0x'
+    eth_sig_obj.signature = sig_bytes  # bytes.hex() => pure hex
 
     return addr, eth_sig_obj.signature.hex()
 
@@ -221,8 +225,16 @@ def send_signed_msg(proof, random_leaf):
         tx["gas"] = 300000
 
     signed = w3.eth.account.sign_transaction(tx, private_key=acct.key)
-    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction).hex()
 
+    # Web3.py v6 uses `raw_transaction` (snake_case), not `rawTransaction`
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
+
+    # (Optional) wait for receipt so you know it finalized
+    try:
+        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    except Exception:
+        # ignore timeout; the tx still may be mined shortly after
+        pass
 
     return tx_hash
 
