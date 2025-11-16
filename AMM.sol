@@ -94,7 +94,10 @@ contract AMM is AccessControl{
     if (amtB > 0) {
         require(ERC20(tokenB).transferFrom(msg.sender, address(this), amtB), "transferFrom B failed");
     }
-    invariant = ERC20(tokenA).balanceOf(address(this)) * ERC20(tokenB).balanceOf(address(this));
+    if (invariant == 0) {
+        _grantRole(LP_ROLE, msg.sender);
+    }
+		invariant = ERC20(tokenA).balanceOf(address(this)) * ERC20(tokenB).balanceOf(address(this));
 		emit LiquidityProvision( msg.sender, amtA, amtB );
 	}
 
