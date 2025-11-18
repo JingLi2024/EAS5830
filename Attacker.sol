@@ -44,7 +44,7 @@ contract Attacker is AccessControl, IERC777Recipient {
 		  depth = 0;
 		
 		// Step 3: Call claimAll() which will trigger the reentrancy
-		  bank.claimAll()
+		  bank.claimAll();
 	}
 
 	/*
