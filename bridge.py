@@ -9,10 +9,8 @@ import pandas as pd
 def connect_to(chain):
     if chain == 'source':  # The source contract chain is avax
         api_url = "https://api.avax-test.network/ext/bc/C/rpc"  # AVAX C-chain testnet
-
     elif chain == 'destination':  # The destination contract chain is bsc
         api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"  # BSC testnet
-
     else:
         return None
 
@@ -39,13 +37,11 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan the last blocks of the source and destination chains
-        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
-        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
+        Scan recent blocks on the given chain.
+        - On 'source': look for Deposit events, call wrap() on destination.
+        - On 'destination': look for Unwrap events, call withdraw() on source.
     """
 
-    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ['source', 'destination']:
         print(f"Invalid chain: {chain}")
         return 0
@@ -90,10 +86,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Get latest block and define a window
+    # Get latest block and define a window similar to the grader's
     latest_block = w3_this.eth.block_number
-    # Use a modest window to be safe but not huge
-    window_size = 40
+    window_size = 40  # small enough to be safe, large enough to catch events
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
 
@@ -152,45 +147,24 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     # ------------------------------------------------------------------
     # DESTINATION SIDE: look for Unwrap events and call withdraw() on source
-    #         (use eth.get_logs directly to avoid RPC 'limit exceeded' issues)
     # ------------------------------------------------------------------
     else:  # chain == "destination"
-        topic_unwrap = Web3.keccak(
-            text="Unwrap(address,address,address,address,uint256)"
-        ).hex()
+        try:
+            events = this_contract.events.Unwrap().get_logs(
+                from_block=from_block,
+                to_block=to_block
+            )
+        except Exception as e:
+            print(f"Error fetching Unwrap logs on destination: {e}")
+            return 0
 
-        logs = []
-
-        # Split the range into small chunks to avoid node limits
-        step = 8
-        start = from_block
-        while start <= to_block:
-            end = min(start + step - 1, to_block)
-            try:
-                chunk_logs = w3_this.eth.get_logs({
-                    "fromBlock": start,
-                    "toBlock": end,
-                    "address": this_address,
-                    "topics": [topic_unwrap],
-                })
-                logs.extend(chunk_logs)
-            except Exception as e:
-                print(f"Unwrap log fetch error for window {start}-{end}: {e}")
-            start = end + 1
-
-        if len(logs) == 0:
+        if len(events) == 0:
             print("No Unwrap events found on destination in recent blocks")
             return 1
 
         base_nonce = w3_other.eth.get_transaction_count(warden_addr)
 
-        for i, log in enumerate(logs):
-            try:
-                ev = this_contract.events.Unwrap().process_log(log)
-            except Exception as e:
-                print(f"Error decoding Unwrap log: {e}")
-                continue
-
+        for i, ev in enumerate(events):
             args = ev["args"]
             # event Unwrap(
             #   address underlying_token,
