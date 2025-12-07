@@ -4,6 +4,7 @@ from web3.middleware import ExtraDataToPOAMiddleware  # Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
+import time # <-- ADDED: Import time module for delays
 
 
 def connect_to(chain):
@@ -172,7 +173,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"Primary Unwrap log fetch failed: {msg}")
         # Fallback: slide a small window to avoid RPC 'limit exceeded'
         events = []
-        window_size = 5
+        # Fallback changes: Increased window size and added time delay
+        window_size = 20 # INCREASED window_size from 5 to 20
         start = from_block
         while start <= to_block:
             end = min(start + window_size, to_block)
@@ -182,8 +184,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     to_block=end,
                 )
                 events.extend(sub_events)
+                time.sleep(1) # ADDED: 1-second delay to respect rate limit
             except Exception as e2:
                 print(f"Window {start}-{end} Unwrap log fetch failed: {e2}")
+                time.sleep(2) # ADDED: Longer 2-second delay on failure
             start = end + 1
 
     if len(events) == 0:
