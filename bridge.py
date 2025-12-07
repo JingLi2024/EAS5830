@@ -37,7 +37,7 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan the last 5 blocks of the source and destination chains
+        Scan the last 10 blocks (or a minimal range on destination)
         Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
         When Deposit events are found on the source chain, call the 'wrap' function the destination chain
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
@@ -88,10 +88,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # 🛑 MODIFICATION HERE: Set a small window size (5 blocks)
-    # This minimizes the data requested to avoid the RPC 'limit exceeded' error on BSC
+    # Set a wider window (10 blocks) for Source/AVAX, which is stable. 
+    # This ensures multiple autograder Deposits are caught.
     latest_block = w3_this.eth.block_number
-    window_size = 5 
+    window_size = 10 
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
 
@@ -169,14 +169,14 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:  # chain == "destination"
         events = []
         try:
-            # 1. Try the full 5-block range first
+            # 1. Try the full 10-block range first
             events = this_contract.events.Unwrap().get_logs(
                 from_block=from_block,
                 to_block=to_block
             )
         except Exception as e:
-            # If the 5-block range fails due to rate limit, fall back to a 1-block request
-            print(f"Primary 5-block log fetch failed: {e}. Falling back to 1-block scan.")
+            # If the full range fails due to rate limit, fall back to a 1-block request
+            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to 1-block scan.")
             try:
                 # 2. Fallback: Try only the latest block (smallest possible request)
                 events = this_contract.events.Unwrap().get_logs(
