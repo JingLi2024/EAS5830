@@ -100,7 +100,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:
         print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
 
-    # Helper to extract raw tx safely (to avoid AttributeError: 'SignedTransaction' object has no attribute 'raw_transaction')
+    # Helper to extract raw tx safely
     def get_raw_tx(signed_tx):
         if hasattr(signed_tx, "rawTransaction"):
             return signed_tx.rawTransaction
@@ -155,7 +155,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
 
                 signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed) # Use helper function
+                raw_tx = get_raw_tx(signed)
                 tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent wrap() on destination: {tx_hash.hex()}")
             except Exception as e:
@@ -167,15 +167,26 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # DESTINATION SIDE: look for Unwrap events and call withdraw() on source
     # ------------------------------------------------------------------
     else:  # chain == "destination"
+        events = []
         try:
+            # 1. Try the full 5-block range first
             events = this_contract.events.Unwrap().get_logs(
                 from_block=from_block,
                 to_block=to_block
             )
         except Exception as e:
-            # We rely on the small window to prevent the 'limit exceeded' error
-            print(f"Error fetching Unwrap logs on destination: {e}")
-            return 0
+            # If the 5-block range fails due to rate limit, fall back to a 1-block request
+            print(f"Primary 5-block log fetch failed: {e}. Falling back to 1-block scan.")
+            try:
+                # 2. Fallback: Try only the latest block (smallest possible request)
+                events = this_contract.events.Unwrap().get_logs(
+                    from_block=latest_block,
+                    to_block=latest_block
+                )
+            except Exception as e2:
+                # If even the 1-block request fails, we must give up.
+                print(f"Fallback 1-block scan failed: {e2}. Cannot fetch logs.")
+                return 0
 
         if len(events) == 0:
             print("No Unwrap events found on destination in recent blocks")
@@ -207,7 +218,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
 
                 signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed) # Use helper function
+                raw_tx = get_raw_tx(signed)
                 tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent withdraw() on source: {tx_hash.hex()}")
             except Exception as e:
