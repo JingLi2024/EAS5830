@@ -39,13 +39,12 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan the last 5 blocks of the source and destination chains
+        Scan recent blocks of the source and destination chains
         Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
+        When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ['source', 'destination']:
         print(f"Invalid chain: {chain}")
         return 0
@@ -90,9 +89,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Scan the last 5 blocks on the chain we were asked to scan
+    # --- Choose a slightly larger window so we don't miss events ---
     latest_block = w3_this.eth.block_number
-    from_block = max(latest_block - 4, 0)
+    # Look back up to 20 blocks instead of just 5 to be safer against network timing
+    from_block = max(latest_block - 20, 0)
     to_block = latest_block
 
     if from_block == to_block:
@@ -106,12 +106,36 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             return signed_tx.rawTransaction
         if isinstance(signed_tx, dict) and "rawTransaction" in signed_tx:
             return signed_tx["rawTransaction"]
-        # Fallback: some versions use "raw_transaction"
         if hasattr(signed_tx, "raw_transaction"):
             return signed_tx.raw_transaction
         if isinstance(signed_tx, dict) and "raw_transaction" in signed_tx:
             return signed_tx["raw_transaction"]
         raise RuntimeError("Could not extract rawTransaction from signed tx")
+
+    # Helper to fetch Unwrap logs robustly (handles "limit exceeded" by shrinking window)
+    def fetch_unwrap_events():
+        try:
+            return this_contract.events.Unwrap().get_logs(
+                from_block=from_block,
+                to_block=to_block,
+            )
+        except Exception as e:
+            msg = str(e)
+            print(f"Primary Unwrap log fetch failed: {msg}")
+            # If RPC complains about limits, fall back to a smaller window (last 5 blocks)
+            if "limit exceeded" in msg:
+                small_from = max(to_block - 4, 0)
+                print(f"Retrying Unwrap log fetch on smaller window {small_from}-{to_block}")
+                try:
+                    return this_contract.events.Unwrap().get_logs(
+                        from_block=small_from,
+                        to_block=to_block,
+                    )
+                except Exception as e2:
+                    print(f"Fallback Unwrap log fetch failed: {e2}")
+                    return []
+            # Other errors: just return no events
+            return []
 
     # If we are scanning the source chain (Avalanche), look for Deposit and call wrap() on destination
     if chain == "source":
@@ -125,7 +149,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             return 0
 
         if len(events) == 0:
-            print("No Deposit events found on source in last 5 blocks")
+            print("No Deposit events found on source in recent blocks")
             return 1
 
         base_nonce = w3_other.eth.get_transaction_count(warden_addr)
@@ -162,17 +186,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     # If we are scanning the destination chain (BSC), look for Unwrap and call withdraw() on source
     else:  # chain == "destination"
-        try:
-            events = this_contract.events.Unwrap().get_logs(
-                from_block=from_block,
-                to_block=to_block,
-            )
-        except Exception as e:
-            print(f"Error fetching Unwrap logs on destination: {e}")
-            return 0
+        events = fetch_unwrap_events()
 
         if len(events) == 0:
-            print("No Unwrap events found on destination in last 5 blocks")
+            print("No Unwrap events found on destination in recent blocks")
             return 1
 
         base_nonce = w3_other.eth.get_transaction_count(warden_addr)
