@@ -50,86 +50,58 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 0
     
         #YOUR CODE HERE
- # ---- load full contract_info so we can see both chains + (optionally) warden key ----
+  # Determine the opposite chain
+    other_chain = 'destination' if chain == 'source' else 'source'
+
+    # Load contract info for this chain and the other chain
+    this_info  = get_contract_info(chain,       contract_info)
+    other_info = get_contract_info(other_chain, contract_info)
+
+    if this_info == 0 or other_info == 0:
+        print("Error: could not load contract info")
+        return 0
+
     try:
-        with open(contract_info, "r") as f:
-            all_contracts = json.load(f)
+        this_address  = Web3.to_checksum_address(this_info["address"])
+        this_abi      = this_info["abi"]
+        other_address = Web3.to_checksum_address(other_info["address"])
+        other_abi     = other_info["abi"]
+    except KeyError as e:
+        print(f"Missing key in contract_info.json: {e}")
+        return 0
+
+    # Load the warden private key (same as the deployer / your account)
+    # Here we reuse the secret_key.txt format from your sign_message code.
+    try:
+        with open("secret_key.txt", "r") as f:
+            lines = f.readlines()
+        assert len(lines) > 0, "secret_key.txt is empty"
+        warden_pk = lines[0].strip()
     except Exception as e:
-        print(f"Failed to read contract info\nPlease contact your instructor\n{e}")
+        print(f"Could not read warden private key from secret_key.txt: {e}")
         return 0
-
-    try:
-        source_info = all_contracts["source"]
-        dest_info   = all_contracts["destination"]
-    except KeyError as e:
-        print(f"Missing contract info section: {e}")
-        return 0
-
-    # addresses / ABIs from your JSON
-    try:
-        source_address = Web3.to_checksum_address(source_info["address"])
-        source_abi     = source_info["abi"]
-        dest_address   = Web3.to_checksum_address(dest_info["address"])
-        dest_abi       = dest_info["abi"]
-    except KeyError as e:
-        print(f"Missing key in contract info: {e}")
-        return 0
-
-    # ---- find warden private key ----
-    warden_pk = None
-    # optional top-level warden object
-    if "warden" in all_contracts and "private_key" in all_contracts["warden"]:
-        warden_pk = all_contracts["warden"]["private_key"]
-    # or generic top-level private_key
-    elif "private_key" in all_contracts:
-        warden_pk = all_contracts["private_key"]
-    # or per-chain
-    elif "private_key" in source_info:
-        warden_pk = source_info["private_key"]
-    elif "private_key" in dest_info:
-        warden_pk = dest_info["private_key"]
-    else:
-        # fallback: reuse the key from secret_key.txt (same as sign_message)
-        try:
-            with open("secret_key.txt", "r") as f:
-                lines = f.readlines()
-            assert len(lines) > 0, "secret_key.txt is empty"
-            warden_pk = lines[0].strip()
-        except Exception as e:
-            print(f"Could not find warden private key: {e}")
-            return 0
 
     if not str(warden_pk).startswith("0x"):
         warden_pk = "0x" + str(warden_pk)
 
-    # ---- connect to both chains ----
-    w3_source      = connect_to("source")
-    w3_destination = connect_to("destination")
+    # Connect to both chains
+    w3_this  = connect_to(chain)
+    w3_other = connect_to(other_chain)
 
-    # warden account (same key on both chains)
-    warden_account = w3_source.eth.account.privateKeyToAccount(warden_pk)
-    warden_address = warden_account.address
+    if w3_this is None or w3_other is None:
+        print("Error: could not connect to one of the chains")
+        return 0
 
-    # contract instances
-    source_contract = w3_source.eth.contract(address=source_address, abi=source_abi)
-    dest_contract   = w3_destination.eth.contract(address=dest_address, abi=dest_abi)
+    # Derive warden address (same account used on both chains)
+    warden_acct = w3_this.eth.account.from_key(warden_pk)
+    warden_addr = warden_acct.address
 
-    # decide which chain we’re scanning and which is “other”
-    if chain == "source":
-        # scan Avalanche, send txs to BSC
-        w3_scan        = w3_source
-        scan_contract  = source_contract
-        w3_other       = w3_destination
-        other_contract = dest_contract
-    else:
-        # scan BSC, send txs to Avalanche
-        w3_scan        = w3_destination
-        scan_contract  = dest_contract
-        w3_other       = w3_source
-        other_contract = source_contract
+    # Build contract objects
+    this_contract  = w3_this.eth.contract(address=this_address,  abi=this_abi)
+    other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # ---- scan last 5 blocks on selected chain ----
-    latest_block = w3_scan.eth.block_number
+    # Scan the last 5 blocks on the chain we were asked to scan
+    latest_block = w3_this.eth.block_number
     from_block   = max(latest_block - 4, 0)
     to_block     = latest_block
 
@@ -138,11 +110,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:
         print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
 
-    # ---- handle events ----
+    # If we are scanning the source chain (Avalanche), look for Deposit and call wrap() on destination
     if chain == "source":
-        # Look for Deposit(token, recipient, amount) on source
         try:
-            events = scan_contract.events.Deposit().get_logs(
+            events = this_contract.events.Deposit().get_logs(
                 fromBlock=from_block,
                 toBlock=to_block
             )
@@ -154,10 +125,11 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print("No Deposit events found on source in last 5 blocks")
             return 1
 
-        base_nonce = w3_other.eth.get_transaction_count(warden_address)
+        base_nonce = w3_other.eth.get_transaction_count(warden_addr)
 
         for i, ev in enumerate(events):
             args = ev["args"]
+            # event Deposit(address token, address recipient, uint256 amount)
             token     = args["token"]
             recipient = args["recipient"]
             amount    = args["amount"]
@@ -171,23 +143,23 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     recipient,
                     amount
                 ).build_transaction({
-                    "from": warden_address,
+                    "from": warden_addr,
                     "nonce": base_nonce + i,
                     "gas": 300000,
                     "gasPrice": w3_other.eth.gas_price,
-                    "chainId": w3_other.eth.chain_id
+                    "chainId": w3_other.eth.chain_id,
                 })
 
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
+                signed  = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
                 tx_hash = w3_other.eth.send_raw_transaction(signed.rawTransaction)
                 print(f"Sent wrap() on destination: {tx_hash.hex()}")
             except Exception as e:
                 print(f"Error sending wrap() tx on destination: {e}")
 
+    # If we are scanning the destination chain (BSC), look for Unwrap and call withdraw() on source
     else:  # chain == "destination"
-        # Look for Unwrap(underlying_token, wrapped_token, frm, to, amount) on destination
         try:
-            events = scan_contract.events.Unwrap().get_logs(
+            events = this_contract.events.Unwrap().get_logs(
                 fromBlock=from_block,
                 toBlock=to_block
             )
@@ -199,10 +171,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print("No Unwrap events found on destination in last 5 blocks")
             return 1
 
-        base_nonce = w3_other.eth.get_transaction_count(warden_address)
+        base_nonce = w3_other.eth.get_transaction_count(warden_addr)
 
         for i, ev in enumerate(events):
             args = ev["args"]
+            # event Unwrap(
+            #   address underlying_token,
+            #   address wrapped_token,
+            #   address frm,
+            #   address to,
+            #   uint256 amount
+            # );
             underlying = args["underlying_token"]
             recipient  = args["to"]
             amount     = args["amount"]
@@ -216,14 +195,14 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     recipient,
                     amount
                 ).build_transaction({
-                    "from": warden_address,
+                    "from": warden_addr,
                     "nonce": base_nonce + i,
                     "gas": 300000,
                     "gasPrice": w3_other.eth.gas_price,
-                    "chainId": w3_other.eth.chain_id
+                    "chainId": w3_other.eth.chain_id,
                 })
 
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
+                signed  = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
                 tx_hash = w3_other.eth.send_raw_transaction(signed.rawTransaction)
                 print(f"Sent withdraw() on source: {tx_hash.hex()}")
             except Exception as e:
