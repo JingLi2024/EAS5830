@@ -89,7 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Scan recent blocks (look back up to ~40 blocks to be safe)
+    # Scan recent blocks (look back ~40 blocks to be safe)
     latest_block = w3_this.eth.block_number
     from_block = max(latest_block - 40, 0)
     to_block = latest_block
@@ -162,29 +162,51 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 1
 
     # -------- DESTINATION CHAIN: handle Unwrap -> withdraw() on source --------
-    # On BSC testnet, block range log queries often hit "limit exceeded".
-    # Work around this by scanning block-by-block using blockHash filters.
+    # Instead of eth_getLogs (which hits 'limit exceeded' on BSC), we:
+    #   - iterate over blocks
+    #   - fetch each block's transactions
+    #   - fetch each transaction receipt
+    #   - scan logs for Unwrap events from our Destination contract
     unwrap_topic0 = Web3.keccak(
         text="Unwrap(address,address,address,address,uint256)"
-    ).hex()
+    ).hex().lower()
 
     events = []
 
     for b in range(from_block, to_block + 1):
         try:
-            block = w3_this.eth.get_block(b, full_transactions=False)
-            logs = w3_this.eth.get_logs({
-                "blockHash": block["hash"],
-                "address": this_address,
-                "topics": [unwrap_topic0],
-            })
-            for log in logs:
-                # Decode the log into an event object, so we can reuse the same code path
-                ev = this_contract.events.Unwrap().process_log(log)
-                events.append(ev)
+            block = w3_this.eth.get_block(b, full_transactions=True)
         except Exception as e:
-            # Don't spam output on every block; just skip on error
+            print(f"Error fetching block {b} on {chain}: {e}")
             continue
+
+        # block["transactions"] can be a list of tx dicts or hashes depending on full_transactions
+        for tx in block["transactions"]:
+            try:
+                if isinstance(tx, dict):
+                    tx_hash = tx["hash"]
+                else:
+                    tx_hash = tx
+
+                receipt = w3_this.eth.get_transaction_receipt(tx_hash)
+
+                for log in receipt["logs"]:
+                    # only care about logs from our Destination contract
+                    if log["address"].lower() != this_address.lower():
+                        continue
+                    if not log["topics"]:
+                        continue
+                    if log["topics"][0].hex().lower() != unwrap_topic0:
+                        continue
+                    try:
+                        ev = this_contract.events.Unwrap().process_log(log)
+                        events.append(ev)
+                    except Exception:
+                        # if decoding fails, skip this log
+                        continue
+            except Exception:
+                # receipt or log issues: skip this tx
+                continue
 
     if len(events) == 0:
         print("No Unwrap events found on destination in recent blocks")
