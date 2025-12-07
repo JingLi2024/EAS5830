@@ -89,7 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    #  Use a very small block range (5 blocks)
+    # 🛑 MODIFICATION HERE: Use a very small block range (5 blocks)
     # to minimize the chance of hitting the RPC rate limit
     latest_block = w3_this.eth.block_number
     from_block   = max(latest_block - 4, 0) # Look back 5 blocks (current + 4 previous)
@@ -164,7 +164,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # If we are scanning the destination chain (BSC), look for Unwrap and call withdraw() on source
     else:  # chain == "destination"
         try:
-            # MODIFICATION HERE: Rely only on the single 5-block request
+            # 🛑 MODIFICATION HERE: Rely only on the single 5-block request
             events = this_contract.events.Unwrap().get_logs(
                 from_block=from_block,
                 to_block=to_block
