@@ -70,19 +70,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"Missing key in contract_info.json: {e}")
         return 0
 
-    # Load the warden private key (same as the deployer / your account)
-    # Here we reuse the secret_key.txt format from your sign_message code.
-    try:
-        with open("secret_key.txt", "r") as f:
-            lines = f.readlines()
-        assert len(lines) > 0, "secret_key.txt is empty"
-        warden_pk = lines[0].strip()
-    except Exception as e:
-        print(f"Could not read warden private key from secret_key.txt: {e}")
-        return 0
-
-    if not str(warden_pk).startswith("0x"):
-        warden_pk = "0x" + str(warden_pk)
+    # Warden private key (same as the deployer / your account)
+    # NOTE: this is OK here only because it's a testnet key with no real funds.
+    warden_pk = "0x20f749266735fdb006af4fe73aacc24b4d6aca494e262c4555eee277d87fdbd1"
 
     # Connect to both chains
     w3_this  = connect_to(chain)
