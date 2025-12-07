@@ -11,7 +11,7 @@ def connect_to(chain):
         api_url = f"https://api.avax-test.network/ext/bc/C/rpc" #AVAX C-chain testnet
 
     if chain == 'destination':  # The destination contract chain is bsc
-        # Revert to the original unstable, but publicly usable, RPC
+        # Reverting to the original public RPC, using fallback logic to manage rate limits
         api_url = f"https://data-seed-prebsc-1-s1.binance.org:8545/" #BSC testnet
 
     if chain in ['source','destination']:
@@ -89,7 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Set a wider window (10 blocks) for Source/AVAX
+    # Set a wider window (10 blocks) for both chains for better coverage
     latest_block = w3_this.eth.block_number
     window_size = 10 
     from_block = max(latest_block - window_size, 0)
@@ -134,7 +134,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             base_nonce = w3_other.eth.get_transaction_count(warden_addr)
         except Exception as e:
             # Fatal error: cannot get nonce on destination chain. The RPC is dead.
-            print(f"ERROR: running scan_blocks('source')")
             print(f"Error fetching nonce on destination: {e}")
             return 0
 
@@ -168,7 +167,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent wrap() on destination: {tx_hash.hex()}")
             except Exception as e:
-                # Catch the 403 or other transaction-sending error but continue the loop
+                # Catch the transaction-sending error but continue the loop
                 print(f"Error sending wrap() tx on destination: {e}. Skipping this event.")
 
         return 1
