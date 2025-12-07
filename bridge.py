@@ -104,8 +104,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     if chain == "source":
         try:
             events = this_contract.events.Deposit().get_logs(
-                fromBlock=from_block,
-                toBlock=to_block
+                from_block=from_block,
+                to_block=to_block
             )
         except Exception as e:
             print(f"Error fetching Deposit logs on source: {e}")
@@ -150,8 +150,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:  # chain == "destination"
         try:
             events = this_contract.events.Unwrap().get_logs(
-                fromBlock=from_block,
-                toBlock=to_block
+                from_block=from_block,
+                to_block=to_block
             )
         except Exception as e:
             print(f"Error fetching Unwrap logs on destination: {e}")
