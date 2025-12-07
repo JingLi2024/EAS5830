@@ -1,6 +1,6 @@
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
-from web3.middleware import ExtraDataToPOAMiddleware # Necessary for POA chains
+from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
@@ -8,15 +8,15 @@ import pandas as pd
 
 def connect_to(chain):
     if chain == 'source':  # The source contract chain is avax
-        api_url = "https://api.avax-test.network/ext/bc/C/rpc"  # AVAX C-chain testnet
-    elif chain == 'destination':  # The destination contract chain is bsc
-        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"  # BSC testnet
-    else:
-        return None
+        api_url = f"https://api.avax-test.network/ext/bc/C/rpc" #AVAX C-chain testnet
 
-    w3 = Web3(Web3.HTTPProvider(api_url))
-    # inject the poa compatibility middleware to the innermost layer
-    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    if chain == 'destination':  # The destination contract chain is bsc
+        api_url = f"https://data-seed-prebsc-1-s1.binance.org:8545/" #BSC testnet
+
+    if chain in ['source','destination']:
+        w3 = Web3(Web3.HTTPProvider(api_url))
+        # inject the poa compatibility middleware to the innermost layer
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
 
@@ -29,7 +29,7 @@ def get_contract_info(chain, contract_info):
         with open(contract_info, 'r') as f:
             contracts = json.load(f)
     except Exception as e:
-        print(f"Failed to read contract info\nPlease contact your instructor\n{e}")
+        print( f"Failed to read contract info\nPlease contact your instructor\n{e}" )
         return 0
     return contracts[chain]
 
@@ -37,13 +37,15 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan recent blocks on the given chain.
-        - On 'source': look for Deposit events, call wrap() on destination.
-        - On 'destination': look for Unwrap events, call withdraw() on source.
+        Scan the last 5 blocks of the source and destination chains
+        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
+        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
+        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    if chain not in ['source', 'destination']:
-        print(f"Invalid chain: {chain}")
+    # This is different from Bridge IV where chain was "avax" or "bsc"
+    if chain not in ['source','destination']:
+        print( f"Invalid chain: {chain}" )
         return 0
 
     # Determine the opposite chain
@@ -86,12 +88,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Get latest block and define a window similar to the grader's
+    # 🛑 MODIFICATION HERE: Set a small window size (5 blocks)
+    # This minimizes the data requested to avoid the RPC 'limit exceeded' error on BSC
     latest_block = w3_this.eth.block_number
-    
-    # 🛑 MODIFICATION HERE: Reduced window size to 5 to avoid RPC rate limit
-    window_size = 5
-    
+    window_size = 5 
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
 
@@ -100,7 +100,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:
         print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
 
-    # Helper to extract raw tx safely (copied from previous context)
+    # Helper to extract raw tx safely (to avoid AttributeError: 'SignedTransaction' object has no attribute 'raw_transaction')
     def get_raw_tx(signed_tx):
         if hasattr(signed_tx, "rawTransaction"):
             return signed_tx.rawTransaction
@@ -117,7 +117,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # ------------------------------------------------------------------
     if chain == "source":
         try:
-            # web3.py v7 style arguments
             events = this_contract.events.Deposit().get_logs(
                 from_block=from_block,
                 to_block=to_block
@@ -174,7 +173,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 to_block=to_block
             )
         except Exception as e:
-            # This is the line that will now catch the error with a smaller block range
+            # We rely on the small window to prevent the 'limit exceeded' error
             print(f"Error fetching Unwrap logs on destination: {e}")
             return 0
 
