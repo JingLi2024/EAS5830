@@ -1,6 +1,6 @@
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
-from web3.middleware import ExtraDataToPOAMiddleware  # Necessary for POA chains
+from web3.middleware import ExtraDataToPOAMiddleware # Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
@@ -88,12 +88,30 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     # Get latest block and define a window similar to the grader's
     latest_block = w3_this.eth.block_number
-    window_size = 40  # small enough to be safe, large enough to catch events
+    
+    # 🛑 MODIFICATION HERE: Reduced window size to 5 to avoid RPC rate limit
+    window_size = 5
+    
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
 
-    print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
+    if from_block == to_block:
+        print(f"[{datetime.utcnow()}] Scanning block {from_block} on {chain}")
+    else:
+        print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
 
+    # Helper to extract raw tx safely (copied from previous context)
+    def get_raw_tx(signed_tx):
+        if hasattr(signed_tx, "rawTransaction"):
+            return signed_tx.rawTransaction
+        if isinstance(signed_tx, dict) and "rawTransaction" in signed_tx:
+            return signed_tx["rawTransaction"]
+        if hasattr(signed_tx, "raw_transaction"):
+            return signed_tx.raw_transaction
+        if isinstance(signed_tx, dict) and "raw_transaction" in signed_tx:
+            return signed_tx["raw_transaction"]
+        raise RuntimeError("Could not extract rawTransaction from signed tx")
+    
     # ------------------------------------------------------------------
     # SOURCE SIDE: look for Deposit events and call wrap() on destination
     # ------------------------------------------------------------------
@@ -138,7 +156,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
 
                 signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                tx_hash = w3_other.eth.send_raw_transaction(signed.raw_transaction)
+                raw_tx = get_raw_tx(signed) # Use helper function
+                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent wrap() on destination: {tx_hash.hex()}")
             except Exception as e:
                 print(f"Error sending wrap() tx on destination: {e}")
@@ -155,6 +174,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 to_block=to_block
             )
         except Exception as e:
+            # This is the line that will now catch the error with a smaller block range
             print(f"Error fetching Unwrap logs on destination: {e}")
             return 0
 
@@ -166,13 +186,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         for i, ev in enumerate(events):
             args = ev["args"]
-            # event Unwrap(
-            #   address underlying_token,
-            #   address wrapped_token,
-            #   address frm,
-            #   address to,
-            #   uint256 amount
-            # );
+            # event Unwrap(...)
             underlying = args["underlying_token"]
             recipient = args["to"]
             amount = args["amount"]
@@ -194,7 +208,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
 
                 signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                tx_hash = w3_other.eth.send_raw_transaction(signed.raw_transaction)
+                raw_tx = get_raw_tx(signed) # Use helper function
+                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent withdraw() on source: {tx_hash.hex()}")
             except Exception as e:
                 print(f"Error sending withdraw() tx on source: {e}")
