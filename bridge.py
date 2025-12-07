@@ -89,7 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Scan recent blocks (look back up to 40 blocks to be safe)
+    # Scan recent blocks (look back up to ~40 blocks to be safe)
     latest_block = w3_this.eth.block_number
     from_block = max(latest_block - 40, 0)
     to_block = latest_block
@@ -114,6 +114,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # -------- SOURCE CHAIN: handle Deposit -> wrap() on destination --------
     if chain == "source":
         try:
+            # web3.py v7 uses snake_case params; it converts to JSON "fromBlock"/"toBlock"
             events = this_contract.events.Deposit().get_logs(
                 from_block=from_block,
                 to_block=to_block,
@@ -161,30 +162,29 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 1
 
     # -------- DESTINATION CHAIN: handle Unwrap -> withdraw() on source --------
-    # Try one big range first
-    try:
-        events = this_contract.events.Unwrap().get_logs(
-            from_block=from_block,
-            to_block=to_block,
-        )
-    except Exception as e:
-        msg = str(e)
-        print(f"Primary Unwrap log fetch failed: {msg}")
-        # Fallback: slide a small window to avoid RPC 'limit exceeded'
-        events = []
-        window_size = 5
-        start = from_block
-        while start <= to_block:
-            end = min(start + window_size, to_block)
-            try:
-                sub_events = this_contract.events.Unwrap().get_logs(
-                    from_block=start,
-                    to_block=end,
-                )
-                events.extend(sub_events)
-            except Exception as e2:
-                print(f"Window {start}-{end} Unwrap log fetch failed: {e2}")
-            start = end + 1
+    # On BSC testnet, block range log queries often hit "limit exceeded".
+    # Work around this by scanning block-by-block using blockHash filters.
+    unwrap_topic0 = Web3.keccak(
+        text="Unwrap(address,address,address,address,uint256)"
+    ).hex()
+
+    events = []
+
+    for b in range(from_block, to_block + 1):
+        try:
+            block = w3_this.eth.get_block(b, full_transactions=False)
+            logs = w3_this.eth.get_logs({
+                "blockHash": block["hash"],
+                "address": this_address,
+                "topics": [unwrap_topic0],
+            })
+            for log in logs:
+                # Decode the log into an event object, so we can reuse the same code path
+                ev = this_contract.events.Unwrap().process_log(log)
+                events.append(ev)
+        except Exception as e:
+            # Don't spam output on every block; just skip on error
+            continue
 
     if len(events) == 0:
         print("No Unwrap events found on destination in recent blocks")
