@@ -89,9 +89,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Scan recent blocks
+    # Scan recent blocks (look back up to 40 blocks to be safe)
     latest_block = w3_this.eth.block_number
-    # Look back up to 40 blocks to be safe and still small
     from_block = max(latest_block - 40, 0)
     to_block = latest_block
 
@@ -162,39 +161,30 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 1
 
     # -------- DESTINATION CHAIN: handle Unwrap -> withdraw() on source --------
-
-    # We manually fetch logs via eth.get_logs to work around RPC 'limit exceeded' issues.
-    # 1. Compute the Unwrap event topic0
-    unwrap_event = this_contract.events.Unwrap()
-    topic0 = unwrap_event._get_event_abi()["signature"] if hasattr(unwrap_event, "_get_event_abi") else None
-    if topic0 is None:
-        # Fallback: compute topic via keccak
-        topic0 = w3_this.keccak(text="Unwrap(address,address,address,address,uint256)").hex()
-
-    events = []
-    # Slide over [from_block, to_block] in small windows to avoid hitting RPC limits
-    window_size = 5
-    start = from_block
-    while start <= to_block:
-        end = min(start + window_size, to_block)
-        try:
-            logs = w3_this.eth.get_logs({
-                "fromBlock": start,
-                "toBlock": end,
-                "address": this_address,
-                "topics": [topic0],
-            })
-            for log in logs:
-                try:
-                    ev = this_contract.events.Unwrap().process_log(log)
-                    events.append(ev)
-                except Exception as e_dec:
-                    print(f"Error decoding Unwrap log at block {log.get('blockNumber')}: {e_dec}")
-        except Exception as e:
-            msg = str(e)
-            print(f"get_logs error on window {start}-{end}: {msg}")
-            # If the node says 'limit exceeded', just move to next window
-        start = end + 1
+    # Try one big range first
+    try:
+        events = this_contract.events.Unwrap().get_logs(
+            from_block=from_block,
+            to_block=to_block,
+        )
+    except Exception as e:
+        msg = str(e)
+        print(f"Primary Unwrap log fetch failed: {msg}")
+        # Fallback: slide a small window to avoid RPC 'limit exceeded'
+        events = []
+        window_size = 5
+        start = from_block
+        while start <= to_block:
+            end = min(start + window_size, to_block)
+            try:
+                sub_events = this_contract.events.Unwrap().get_logs(
+                    from_block=start,
+                    to_block=end,
+                )
+                events.extend(sub_events)
+            except Exception as e2:
+                print(f"Window {start}-{end} Unwrap log fetch failed: {e2}")
+            start = end + 1
 
     if len(events) == 0:
         print("No Unwrap events found on destination in recent blocks")
