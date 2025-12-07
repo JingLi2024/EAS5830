@@ -11,8 +11,8 @@ def connect_to(chain):
         api_url = f"https://api.avax-test.network/ext/bc/C/rpc" #AVAX C-chain testnet
 
     if chain == 'destination':  # The destination contract chain is bsc
-        # !!! Manual Change Required: Replace the unstable RPC with a robust one
-        api_url = f"https://bsc-testnet.public.blastapi.io" # Use this OR the old one if forced
+        # Revert to the original unstable, but publicly usable, RPC
+        api_url = f"https://data-seed-prebsc-1-s1.binance.org:8545/" #BSC testnet
 
     if chain in ['source','destination']:
         w3 = Web3(Web3.HTTPProvider(api_url))
@@ -89,8 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Set a wider window (10 blocks) for Source/AVAX, which is stable. 
-    # This ensures multiple autograder Deposits are caught.
+    # Set a wider window (10 blocks) for Source/AVAX
     latest_block = w3_this.eth.block_number
     window_size = 10 
     from_block = max(latest_block - window_size, 0)
@@ -123,14 +122,22 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 to_block=to_block
             )
         except Exception as e:
+            # Fatal error fetching logs on Source chain
             print(f"Error fetching Deposit logs on source: {e}")
-            return 0
+            return 0 # Fail hard if Source logging fails
 
         if len(events) == 0:
             print("No Deposit events found on source in recent blocks")
             return 1
 
-        base_nonce = w3_other.eth.get_transaction_count(warden_addr)
+        try:
+            base_nonce = w3_other.eth.get_transaction_count(warden_addr)
+        except Exception as e:
+            # Fatal error: cannot get nonce on destination chain. The RPC is dead.
+            print(f"ERROR: running scan_blocks('source')")
+            print(f"Error fetching nonce on destination: {e}")
+            return 0
+
 
         for i, ev in enumerate(events):
             args = ev["args"]
@@ -151,7 +158,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     "from": warden_addr,
                     "nonce": base_nonce + i,
                     "gas": 300000,
-                    "gasPrice": w3_other.eth.gas_price,
+                    # Always try to fetch current gas price if the RPC allows it
+                    "gasPrice": w3_other.eth.gas_price, 
                     "chainId": w3_other.eth.chain_id,
                 })
 
@@ -160,7 +168,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent wrap() on destination: {tx_hash.hex()}")
             except Exception as e:
-                print(f"Error sending wrap() tx on destination: {e}")
+                # Catch the 403 or other transaction-sending error but continue the loop
+                print(f"Error sending wrap() tx on destination: {e}. Skipping this event.")
 
         return 1
 
@@ -180,6 +189,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to 1-block scan.")
             try:
                 # 2. Fallback: Try only the latest block (smallest possible request)
+                latest_block = w3_this.eth.block_number # Re-fetch latest block in case of latency
                 events = this_contract.events.Unwrap().get_logs(
                     from_block=latest_block,
                     to_block=latest_block
@@ -193,7 +203,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print("No Unwrap events found on destination in recent blocks")
             return 1
 
-        base_nonce = w3_other.eth.get_transaction_count(warden_addr)
+        try:
+            base_nonce = w3_other.eth.get_transaction_count(warden_addr)
+        except Exception as e:
+            # Fatal error: cannot get nonce on source chain. The RPC is dead.
+            print(f"Error fetching nonce on source: {e}")
+            return 0
 
         for i, ev in enumerate(events):
             args = ev["args"]
@@ -223,6 +238,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
                 print(f"Sent withdraw() on source: {tx_hash.hex()}")
             except Exception as e:
-                print(f"Error sending withdraw() tx on source: {e}")
+                print(f"Error sending withdraw() tx on source: {e}. Skipping this event.")
 
         return 1
