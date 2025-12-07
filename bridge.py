@@ -39,10 +39,9 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan recent blocks of the source and destination chains
-        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
-        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
+        Scan recent blocks of the source and destination chains.
+        - On source: look for 'Deposit' events and call wrap() on destination.
+        - On destination: look for 'Unwrap' events and call withdraw() on source.
     """
 
     if chain not in ['source', 'destination']:
@@ -89,9 +88,14 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Scan recent blocks (look back ~40 blocks to be safe)
+    # Decide scan window
     latest_block = w3_this.eth.block_number
-    from_block = max(latest_block - 40, 0)
+    if chain == "source":
+        # Slightly larger window to be sure we catch new deposits
+        from_block = max(latest_block - 40, 0)
+    else:
+        # Very small window to avoid BSC 'limit exceeded' and still catch recent Unwraps
+        from_block = max(latest_block - 2, 0)
     to_block = latest_block
 
     if from_block == to_block:
@@ -101,14 +105,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     # Helper to extract raw tx safely
     def get_raw_tx(signed_tx):
+        # web3 v5: SignedTransaction has .rawTransaction
         if hasattr(signed_tx, "rawTransaction"):
             return signed_tx.rawTransaction
-        if isinstance(signed_tx, dict) and "rawTransaction" in signed_tx:
-            return signed_tx["rawTransaction"]
+        # Some versions / representations may have alt keys
+        if isinstance(signed_tx, dict):
+            if "rawTransaction" in signed_tx:
+                return signed_tx["rawTransaction"]
+            if "raw_transaction" in signed_tx:
+                return signed_tx["raw_transaction"]
         if hasattr(signed_tx, "raw_transaction"):
             return signed_tx.raw_transaction
-        if isinstance(signed_tx, dict) and "raw_transaction" in signed_tx:
-            return signed_tx["raw_transaction"]
         raise RuntimeError("Could not extract rawTransaction from signed tx")
 
     # -------- SOURCE CHAIN: handle Deposit -> wrap() on destination --------
@@ -162,51 +169,14 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 1
 
     # -------- DESTINATION CHAIN: handle Unwrap -> withdraw() on source --------
-    # Instead of eth_getLogs (which hits 'limit exceeded' on BSC), we:
-    #   - iterate over blocks
-    #   - fetch each block's transactions
-    #   - fetch each transaction receipt
-    #   - scan logs for Unwrap events from our Destination contract
-    unwrap_topic0 = Web3.keccak(
-        text="Unwrap(address,address,address,address,uint256)"
-    ).hex().lower()
-
-    events = []
-
-    for b in range(from_block, to_block + 1):
-        try:
-            block = w3_this.eth.get_block(b, full_transactions=True)
-        except Exception as e:
-            print(f"Error fetching block {b} on {chain}: {e}")
-            continue
-
-        # block["transactions"] can be a list of tx dicts or hashes depending on full_transactions
-        for tx in block["transactions"]:
-            try:
-                if isinstance(tx, dict):
-                    tx_hash = tx["hash"]
-                else:
-                    tx_hash = tx
-
-                receipt = w3_this.eth.get_transaction_receipt(tx_hash)
-
-                for log in receipt["logs"]:
-                    # only care about logs from our Destination contract
-                    if log["address"].lower() != this_address.lower():
-                        continue
-                    if not log["topics"]:
-                        continue
-                    if log["topics"][0].hex().lower() != unwrap_topic0:
-                        continue
-                    try:
-                        ev = this_contract.events.Unwrap().process_log(log)
-                        events.append(ev)
-                    except Exception:
-                        # if decoding fails, skip this log
-                        continue
-            except Exception:
-                # receipt or log issues: skip this tx
-                continue
+    try:
+        events = this_contract.events.Unwrap().get_logs(
+            from_block=from_block,
+            to_block=to_block,
+        )
+    except Exception as e:
+        print(f"Error fetching Unwrap logs on destination: {e}")
+        return 0
 
     if len(events) == 0:
         print("No Unwrap events found on destination in recent blocks")
