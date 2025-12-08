@@ -38,10 +38,9 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan recent blocks
-        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
-        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
+        Scan recent blocks.
+        - On 'source': look for Deposit events and call wrap() on destination
+        - On 'destination': look for Unwrap events and call withdraw() on source
     """
 
     if chain not in ['source', 'destination']:
@@ -90,11 +89,11 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     latest_block = w3_this.eth.block_number
 
-    # Window size: 10 on source, 20 on destination (just a bit wider there)
+    # Window size: keep it small to keep RPC happy
     if chain == "source":
         window_size = 10
     else:
-        window_size = 20
+        window_size = 10  # small on destination too, receipts fallback will do the heavy lifting
 
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
@@ -143,115 +142,4 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         for i, ev in enumerate(events):
             args = ev["args"]
-            # event Deposit(address token, address recipient, uint256 amount)
-            token = args["token"]
-            recipient = args["recipient"]
-            amount = args["amount"]
-
-            print(f"Found Deposit on source: tx={ev['transactionHash'].hex()}")
-            print(f"  token={token}, recipient={recipient}, amount={amount}")
-
-            try:
-                tx = other_contract.functions.wrap(
-                    token,
-                    recipient,
-                    amount
-                ).build_transaction({
-                    "from": warden_addr,
-                    "nonce": base_nonce + i,
-                    "gas": 300000,
-                    # Always try to fetch current gas price if the RPC allows it
-                    "gasPrice": w3_other.eth.gas_price,
-                    "chainId": w3_other.eth.chain_id,
-                })
-
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed)
-                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
-                print(f"Sent wrap() on destination: {tx_hash.hex()}")
-            except Exception as e:
-                # Catch the transaction-sending error but continue the loop
-                print(f"Error sending wrap() tx on destination: {e}. Skipping this event.")
-
-        return 1
-
-    # ------------------------------------------------------------------
-    # DESTINATION SIDE: look for Unwrap events and call withdraw() on source
-    # ------------------------------------------------------------------
-    else:  # chain == "destination"
-        events = []
-
-        # First attempt: try the whole window in one get_logs call
-        try:
-            events = this_contract.events.Unwrap().get_logs(
-                from_block=from_block,
-                to_block=to_block
-            )
-        except Exception as e:
-            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to blockHash-based scan.")
-
-            # blockHash-based fallback:
-            # Compute topic0 for Unwrap(address,address,address,address,uint256)
-            topic0 = w3_this.keccak(text="Unwrap(address,address,address,address,uint256)")
-
-            events = []
-            for b in range(from_block, to_block + 1):
-                try:
-                    block = w3_this.eth.get_block(b)
-                    raw_logs = w3_this.eth.get_logs({
-                        "address": this_address,
-                        "blockHash": block["hash"],
-                        "topics": [topic0],
-                    })
-                    if raw_logs:
-                        # Decode each raw log into an event object
-                        for raw in raw_logs:
-                            ev = this_contract.events.Unwrap().process_log(raw)
-                            events.append(ev)
-                        print(f"  Found {len(raw_logs)} Unwrap event(s) in block {b}")
-                except Exception as e2:
-                    print(f"  Skipping block {b} due to error: {e2}")
-                    continue
-
-        if len(events) == 0:
-            print("No Unwrap events found on destination in recent blocks")
-            return 1
-
-        try:
-            base_nonce = w3_other.eth.get_transaction_count(warden_addr)
-        except Exception as e:
-            # Fatal error: cannot get nonce on source chain. The RPC is dead.
-            print(f"Error fetching nonce on source: {e}")
-            return 0
-
-        for i, ev in enumerate(events):
-            args = ev["args"]
-            # event Unwrap(address underlying_token, address wrapped_token, address frm, address to, uint256 amount)
-            underlying = args["underlying_token"]
-            recipient = args["to"]
-            amount = args["amount"]
-
-            print(f"Found Unwrap on destination: tx={ev['transactionHash'].hex()}")
-            print(f"  underlying={underlying}, to={recipient}, amount={amount}")
-
-            try:
-                tx = other_contract.functions.withdraw(
-                    underlying,
-                    recipient,
-                    amount
-                ).build_transaction({
-                    "from": warden_addr,
-                    "nonce": base_nonce + i,
-                    "gas": 300000,
-                    "gasPrice": w3_other.eth.gas_price,
-                    "chainId": w3_other.eth.chain_id,
-                })
-
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed)
-                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
-                print(f"Sent withdraw() on source: {tx_hash.hex()}")
-            except Exception as e:
-                print(f"Error sending withdraw() tx on source: {e}. Skipping this event.")
-
-        return 1
+            # event Deposit(address token, add
