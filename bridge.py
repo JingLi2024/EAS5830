@@ -1,6 +1,6 @@
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
-from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
+from web3.middleware import ExtraDataToPOAMiddleware  # Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
@@ -8,16 +8,16 @@ import pandas as pd
 
 def connect_to(chain):
     if chain == 'source':  # The source contract chain is avax
-        api_url = f"https://api.avax-test.network/ext/bc/C/rpc" #AVAX C-chain testnet
+        api_url = "https://api.avax-test.network/ext/bc/C/rpc"  # AVAX C-chain testnet
+    elif chain == 'destination':  # The destination contract chain is bsc
+        # Public RPC for BSC testnet
+        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+    else:
+        return None
 
-    if chain == 'destination':  # The destination contract chain is bsc
-        # Reverting to the original public RPC, using fallback logic to manage rate limits
-        api_url = f"https://data-seed-prebsc-1-s1.binance.org:8545/" #BSC testnet
-
-    if chain in ['source','destination']:
-        w3 = Web3(Web3.HTTPProvider(api_url))
-        # inject the poa compatibility middleware to the innermost layer
-        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    w3 = Web3(Web3.HTTPProvider(api_url))
+    # inject the poa compatibility middleware to the innermost layer
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
 
@@ -30,7 +30,7 @@ def get_contract_info(chain, contract_info):
         with open(contract_info, 'r') as f:
             contracts = json.load(f)
     except Exception as e:
-        print( f"Failed to read contract info\nPlease contact your instructor\n{e}" )
+        print(f"Failed to read contract info\nPlease contact your instructor\n{e}")
         return 0
     return contracts[chain]
 
@@ -38,15 +38,14 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan the last 10 blocks (or a minimal range on destination)
+        Scan the last N blocks (10 on source, slightly larger window on destination)
         Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
+        When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    # This is different from Bridge IV where chain was "avax" or "bsc"
-    if chain not in ['source','destination']:
-        print( f"Invalid chain: {chain}" )
+    if chain not in ['source', 'destination']:
+        print(f"Invalid chain: {chain}")
         return 0
 
     # Determine the opposite chain
@@ -89,9 +88,16 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
     other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
 
-    # Set a wider window (10 blocks) for both chains for better coverage
     latest_block = w3_this.eth.block_number
-    window_size = 10 
+
+    # Window size: 10 on source; a bit wider on destination to be robust
+    if chain == "source":
+        window_size = 10
+    else:
+        # Destination frequently hits rate limits and blocks may move quickly
+        # Use a slightly larger window and handle limits with per-block fallback.
+        window_size = 20
+
     from_block = max(latest_block - window_size, 0)
     to_block = latest_block
 
@@ -111,7 +117,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         if isinstance(signed_tx, dict) and "raw_transaction" in signed_tx:
             return signed_tx["raw_transaction"]
         raise RuntimeError("Could not extract rawTransaction from signed tx")
-    
+
     # ------------------------------------------------------------------
     # SOURCE SIDE: look for Deposit events and call wrap() on destination
     # ------------------------------------------------------------------
@@ -124,7 +130,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         except Exception as e:
             # Fatal error fetching logs on Source chain
             print(f"Error fetching Deposit logs on source: {e}")
-            return 0 # Fail hard if Source logging fails
+            return 0  # Fail hard if Source logging fails
 
         if len(events) == 0:
             print("No Deposit events found on source in recent blocks")
@@ -136,7 +142,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             # Fatal error: cannot get nonce on destination chain. The RPC is dead.
             print(f"Error fetching nonce on destination: {e}")
             return 0
-
 
         for i, ev in enumerate(events):
             args = ev["args"]
@@ -158,7 +163,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     "nonce": base_nonce + i,
                     "gas": 300000,
                     # Always try to fetch current gas price if the RPC allows it
-                    "gasPrice": w3_other.eth.gas_price, 
+                    "gasPrice": w3_other.eth.gas_price,
                     "chainId": w3_other.eth.chain_id,
                 })
 
@@ -177,26 +182,31 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # ------------------------------------------------------------------
     else:  # chain == "destination"
         events = []
+
+        # First attempt: try the whole window in one get_logs call
         try:
-            # 1. Try the full 10-block range first
             events = this_contract.events.Unwrap().get_logs(
                 from_block=from_block,
                 to_block=to_block
             )
         except Exception as e:
-            # If the full range fails due to rate limit, fall back to a 1-block request
-            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to 1-block scan.")
-            try:
-                # 2. Fallback: Try only the latest block (smallest possible request)
-                latest_block = w3_this.eth.block_number # Re-fetch latest block in case of latency
-                events = this_contract.events.Unwrap().get_logs(
-                    from_block=latest_block,
-                    to_block=latest_block
-                )
-            except Exception as e2:
-                # If even the 1-block request fails, we must give up.
-                print(f"Fallback 1-block scan failed: {e2}. Cannot fetch logs.")
-                return 0 # Exit cleanly to allow autograder to try again
+            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to per-block scan.")
+
+            # Fallback strategy: scan each block in the window individually
+            events = []
+            for b in range(from_block, to_block + 1):
+                try:
+                    block_events = this_contract.events.Unwrap().get_logs(
+                        from_block=b,
+                        to_block=b
+                    )
+                    if block_events:
+                        print(f"  Found {len(block_events)} Unwrap event(s) in block {b}")
+                        events.extend(block_events)
+                except Exception as e2:
+                    # If a single block still hits the limit, skip it and continue
+                    print(f"  Skipping block {b} due to error: {e2}")
+                    continue
 
         if len(events) == 0:
             print("No Unwrap events found on destination in recent blocks")
@@ -211,7 +221,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         for i, ev in enumerate(events):
             args = ev["args"]
-            # event Unwrap(...)
+            # event Unwrap(address underlying_token, address wrapped_token, address frm, address to, uint256 amount)
             underlying = args["underlying_token"]
             recipient = args["to"]
             amount = args["amount"]
