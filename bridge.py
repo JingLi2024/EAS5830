@@ -38,7 +38,7 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan the last N blocks (10 on source, slightly larger window on destination)
+        Scan recent blocks
         Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
         When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
@@ -90,12 +90,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     latest_block = w3_this.eth.block_number
 
-    # Window size: 10 on source; a bit wider on destination to be robust
+    # Window size: 10 on source, 20 on destination (just a bit wider there)
     if chain == "source":
         window_size = 10
     else:
-        # Destination frequently hits rate limits and blocks may move quickly
-        # Use a slightly larger window and handle limits with per-block fallback.
         window_size = 20
 
     from_block = max(latest_block - window_size, 0)
@@ -190,21 +188,28 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 to_block=to_block
             )
         except Exception as e:
-            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to per-block scan.")
+            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to blockHash-based scan.")
 
-            # Fallback strategy: scan each block in the window individually
+            # blockHash-based fallback:
+            # Compute topic0 for Unwrap(address,address,address,address,uint256)
+            topic0 = w3_this.keccak(text="Unwrap(address,address,address,address,uint256)")
+
             events = []
             for b in range(from_block, to_block + 1):
                 try:
-                    block_events = this_contract.events.Unwrap().get_logs(
-                        from_block=b,
-                        to_block=b
-                    )
-                    if block_events:
-                        print(f"  Found {len(block_events)} Unwrap event(s) in block {b}")
-                        events.extend(block_events)
+                    block = w3_this.eth.get_block(b)
+                    raw_logs = w3_this.eth.get_logs({
+                        "address": this_address,
+                        "blockHash": block["hash"],
+                        "topics": [topic0],
+                    })
+                    if raw_logs:
+                        # Decode each raw log into an event object
+                        for raw in raw_logs:
+                            ev = this_contract.events.Unwrap().process_log(raw)
+                            events.append(ev)
+                        print(f"  Found {len(raw_logs)} Unwrap event(s) in block {b}")
                 except Exception as e2:
-                    # If a single block still hits the limit, skip it and continue
                     print(f"  Skipping block {b} due to error: {e2}")
                     continue
 
