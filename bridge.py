@@ -4,6 +4,7 @@ from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
+from pathlib import Path
 
 
 def connect_to(chain):
@@ -63,183 +64,28 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         return 0
     
     # ------------------------------------------------------------------
-    # SECURITY IMPROVEMENT: Load private key from external file
+    # FIX: Load private key from external file using robust pathing
     # ------------------------------------------------------------------
+    # 1. Get the directory of the currently running script (bridge.py)
+    script_path = Path(__file__).resolve()
+    
+    # 2. Key is assumed to be in the same folder as bridge.py
+    key_path = script_path.parent / 'secret_key.txt'
+    
+    # 3. Handle cases where the script might be run from a sub-directory
+    if not key_path.exists():
+        key_path = script_path.parent.parent / 'secret_key.txt'
+    
     try:
-        # Read the private key from the file
-        with open('secret_key.txt', 'r') as f:
-            # .strip() removes any leading/trailing whitespace or newlines
+        if not key_path.exists():
+            raise FileNotFoundError("Key file not found in script folder or parent folder.")
+        
+        with open(key_path, 'r') as f:
             warden_pk = f.read().strip()
-    except FileNotFoundError:
-        print("ERROR: secret_key.txt not found. Cannot proceed without the private key.")
+            
+    except FileNotFoundError as e:
+        print(f"ERROR: secret_key.txt not found. Cannot proceed without the private key. (Checked: {key_path})")
         return 0
     except Exception as e:
         print(f"ERROR: Could not read secret_key.txt: {e}")
         return 0
-
-    # ------------------------------------------------------------------
-    
-    # Connect to both chains
-    w3_this = connect_to(chain)
-    w3_other = connect_to(other_chain)
-
-    if w3_this is None or w3_other is None:
-        print("Error: could not connect to one of the chains")
-        return 0
-
-    # Derive warden address (same account used on both chains)
-    warden_acct = w3_this.eth.account.from_key(warden_pk)
-    warden_addr = warden_acct.address
-
-    # Build contract objects
-    this_contract = w3_this.eth.contract(address=this_address, abi=this_abi)
-    other_contract = w3_other.eth.contract(address=other_address, abi=other_abi)
-
-    # Set a wider window (10 blocks) for both chains for better coverage
-    latest_block = w3_this.eth.block_number
-    window_size = 10 
-    from_block = max(latest_block - window_size, 0)
-    to_block = latest_block
-
-    if from_block == to_block:
-        print(f"[{datetime.utcnow()}] Scanning block {from_block} on {chain}")
-    else:
-        print(f"[{datetime.utcnow()}] Scanning blocks {from_block}-{to_block} on {chain}")
-
-    # Helper to extract raw tx safely
-    def get_raw_tx(signed_tx):
-        if hasattr(signed_tx, "rawTransaction"):
-            return signed_tx.rawTransaction
-        if isinstance(signed_tx, dict) and "rawTransaction" in signed_tx:
-            return signed_tx["rawTransaction"]
-        if hasattr(signed_tx, "raw_transaction"):
-            return signed_tx.raw_transaction
-        if isinstance(signed_tx, dict) and "raw_transaction" in signed_tx:
-            return signed_tx["raw_transaction"]
-        raise RuntimeError("Could not extract rawTransaction from signed tx")
-    
-    # ------------------------------------------------------------------
-    # SOURCE SIDE: look for Deposit events and call wrap() on destination
-    # ------------------------------------------------------------------
-    if chain == "source":
-        try:
-            events = this_contract.events.Deposit().get_logs(
-                from_block=from_block,
-                to_block=to_block
-            )
-        except Exception as e:
-            # Fatal error fetching logs on Source chain
-            print(f"Error fetching Deposit logs on source: {e}")
-            return 0 
-
-        if len(events) == 0:
-            print("No Deposit events found on source in recent blocks")
-            return 1
-
-        try:
-            # Get nonce from the 'other' chain (Destination/BSC) for the wrap transaction
-            base_nonce = w3_other.eth.get_transaction_count(warden_addr)
-        except Exception as e:
-            print(f"Error fetching nonce on destination: {e}")
-            return 0
-
-
-        for i, ev in enumerate(events):
-            args = ev["args"]
-            token = args["token"]
-            recipient = args["recipient"]
-            amount = args["amount"]
-
-            print(f"Found Deposit on source: tx={ev['transactionHash'].hex()}")
-            print(f"  token={token}, recipient={recipient}, amount={amount}")
-
-            try:
-                tx = other_contract.functions.wrap(
-                    token,
-                    recipient,
-                    amount
-                ).build_transaction({
-                    "from": warden_addr,
-                    "nonce": base_nonce + i,
-                    "gas": 300000,
-                    "gasPrice": w3_other.eth.gas_price, 
-                    "chainId": w3_other.eth.chain_id,
-                })
-
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed)
-                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
-                print(f"Sent wrap() on destination: {tx_hash.hex()}")
-            except Exception as e:
-                # Catch RPC errors (like 403 or rate limit) on transaction submission
-                print(f"Error sending wrap() tx on destination: {e}. Skipping this event.")
-
-        return 1
-
-    # ------------------------------------------------------------------
-    # DESTINATION SIDE: look for Unwrap events and call withdraw() on source
-    # ------------------------------------------------------------------
-    else:  # chain == "destination"
-        events = []
-        try:
-            # 1. Try the full 10-block range first
-            events = this_contract.events.Unwrap().get_logs(
-                from_block=from_block,
-                to_block=to_block
-            )
-        except Exception as e:
-            # RPC RATE LIMIT FALLBACK: Fall back to a 1-block request
-            print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to 1-block scan.")
-            try:
-                # 2. Fallback: Try only the latest block (smallest possible request)
-                latest_block = w3_this.eth.block_number
-                events = this_contract.events.Unwrap().get_logs(
-                    from_block=latest_block,
-                    to_block=latest_block
-                )
-            except Exception as e2:
-                # If even the 1-block request fails, we give up and return 0
-                print(f"Fallback 1-block scan failed: {e2}. Cannot fetch logs.")
-                return 0 
-
-        if len(events) == 0:
-            print("No Unwrap events found on destination in recent blocks")
-            return 1
-
-        try:
-            # Get nonce from the 'other' chain (Source/AVAX) for the withdraw transaction
-            base_nonce = w3_other.eth.get_transaction_count(warden_addr)
-        except Exception as e:
-            print(f"Error fetching nonce on source: {e}")
-            return 0
-
-        for i, ev in enumerate(events):
-            args = ev["args"]
-            underlying = args["underlying_token"]
-            recipient = args["to"]
-            amount = args["amount"]
-
-            print(f"Found Unwrap on destination: tx={ev['transactionHash'].hex()}")
-            print(f"  underlying={underlying}, to={recipient}, amount={amount}")
-
-            try:
-                tx = other_contract.functions.withdraw(
-                    underlying,
-                    recipient,
-                    amount
-                ).build_transaction({
-                    "from": warden_addr,
-                    "nonce": base_nonce + i,
-                    "gas": 300000,
-                    "gasPrice": w3_other.eth.gas_price,
-                    "chainId": w3_other.eth.chain_id,
-                })
-
-                signed = w3_other.eth.account.sign_transaction(tx, private_key=warden_pk)
-                raw_tx = get_raw_tx(signed)
-                tx_hash = w3_other.eth.send_raw_transaction(raw_tx)
-                print(f"Sent withdraw() on source: {tx_hash.hex()}")
-            except Exception as e:
-                print(f"Error sending withdraw() tx on source: {e}. Skipping this event.")
-
-        return 1
