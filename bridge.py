@@ -67,8 +67,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"Missing key in contract_info.json: {e}")
         return 0
 
-    # Warden private key (same as the deployer / your account)
-    # NOTE: this is OK here only because it's a testnet key with no real funds.
+    # Warden private key 
+   
     warden_pk = "0x20f749266735fdb006af4fe73aacc24b4d6aca494e262c4555eee277d87fdbd1"
 
     # Connect to both chains
@@ -79,7 +79,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print("Error: could not connect to one of the chains")
         return 0
 
-    # Derive warden address (same account used on both chains)
+    # Derive warden address 
     warden_acct = w3_this.eth.account.from_key(warden_pk)
     warden_addr = warden_acct.address
 
@@ -89,10 +89,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     latest_block = w3_this.eth.block_number
 
-    # Window size:
-    #  - Source: last 10 blocks is enough.
-    #  - Destination: use last 100 blocks to be sure we catch Unwrap events the
-    #    autograder just emitted (even if a bunch of blocks passed).
+    
     if chain == "source":
         window_size = 10
     else:
@@ -183,8 +180,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:  # chain == "destination"
         events = []
 
-        # First attempt: try the whole window with get_logs.
-        # If the RPC refuses with -32005 'limit exceeded', we fall back to receipts.
         try:
             events = this_contract.events.Unwrap().get_logs(
                 from_block=from_block,
@@ -194,17 +189,15 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"Primary {window_size}-block log fetch failed: {e}. Falling back to receipt-based scan.")
 
             events = []
-            # Fallback: scan via transaction receipts instead of eth_getLogs.
+            # Fallback: scan via transaction receipts
             for b in range(from_block, to_block + 1):
                 try:
-                    # full_transactions=True gives us tx objects; if not supported,
-                    # web3 will still return tx hashes we can work with.
                     block = w3_this.eth.get_block(b, full_transactions=True)
                 except Exception as e_block:
                     print(f"  Skipping block {b} (get_block failed): {e_block}")
                     continue
 
-                # Depending on web3 version, transactions may be objects or hashes
+   
                 for tx in block["transactions"]:
                     if isinstance(tx, (bytes, str)):  # hash or hex string
                         tx_hash = tx
