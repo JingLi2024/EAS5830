@@ -72,7 +72,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # 2. Key is assumed to be in the same folder as bridge.py
     key_path = script_path.parent / 'secret_key.txt'
     
-    # 3. Handle cases where the script might be run from a sub-directory
+    # 3. Handle cases where the script might be run from a sub-directory 
+    # (e.g., if bridge.py is in a subfolder but the key is in the repo root)
     if not key_path.exists():
         key_path = script_path.parent.parent / 'secret_key.txt'
     
@@ -89,3 +90,11 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     except Exception as e:
         print(f"ERROR: Could not read secret_key.txt: {e}")
         return 0
+
+    # ------------------------------------------------------------------
+    
+    # Connect to both chains
+    w3_this = connect_to(chain)
+    w3_other = connect_to(other_chain)
+
+    if
